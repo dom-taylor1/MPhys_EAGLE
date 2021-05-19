@@ -173,3 +173,22 @@ for jfof in tqdm(range(len(mass_selection)-1)):
     Birth_dens_30kpc[jfof] = np.sum(halo_mass[particle_select]*halo_birth_dens[particle_select]*1e10)/Mstar_30kpc[jfof] #mean mass-weighted stellar birth density within 30kpc
     Energy_frac_30kpc[jfof] = np.sum(halo_mass[particle_select]*halo_energy_frac[particle_select])*1e10/Mstar_30kpc[jfof] #mean mass-weighted energy fraction within 30kpc
     Metal_30kpc[jfof] = np.mean(halo_metal[particle_select]) #mean metallicity within 30kpc
+
+# Store computed quantities in a .hdf5 file for use in other notebooks
+f = h5.File('Particle_quantity_L100_FINAL.hdf5','w')
+f.create_dataset('M200',data=M200)
+f.create_dataset('Mstar_30kpc',data=Mstar_30kpc)
+f.create_dataset('Mstar_tot',data=Mstar_tot)
+f.create_dataset('aexp_30kpc',data=aexp_30kpc)
+f.create_dataset('Mgas_30kpc',data=Mgas_30kpc)
+f.create_dataset('Mgas_tot',data=Mgas_tot)
+f.create_dataset('Gas_dens_30kpc',data=Gas_dens_30kpc)
+f.create_dataset('Gas_dens_tot',data=Gas_dens_tot)
+f.create_dataset('H_abund_30kpc',data=H_abund_30kpc)
+f.create_dataset('H_abund_tot',data=H_abund_tot)
+f.create_dataset('Birth_density_30kpc',data=Birth_dens_30kpc)
+f.create_dataset('Energy_Fraction_30kpc',data=Energy_frac_30kpc)
+f.create_dataset('Metal_30kpc',data=Metal_30kpc)
+f.create_dataset('Gas_fraction_30kpc',data=Gas_fraction_30kpc)
+
+f.close()
