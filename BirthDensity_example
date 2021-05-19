@@ -1,0 +1,302 @@
+import h5py as h5
+import numpy as np
+import matplotlib.pyplot as plt
+import statsmodels.nonparametric.smoothers_lowess as lowess
+from scipy.stats import spearmanr as spear
+
+#REMEMBER TO CHANGE FILE NAME FOR CORRESPONDING SIMULATION DIMENSION
+quant_file = '/home/aridtayl/Documents/MPhys Project/Analysis/Particle_quantity_L100_FINAL.hdf5'
+with h5.File(quant_file,'r') as f:
+    M200 = np.array(f['M200'])
+    Mstar_30kpc = np.array(f['Mstar_30kpc'])
+    H_abund_30kpc = np.array(f['H_abund_30kpc'])
+    Birth_dens_30kpc = np.array(f['Birth_density_30kpc'])
+    
+omega_0 = 0.307
+omega_b = 0.0482519
+
+mstar_over_mhalo = np.log10((Mstar_30kpc/M200)/(omega_b/omega_0))
+log_M200 = np.log10(M200)
+
+#make safe considering mstar_over_mhalo
+make_safe = np.where(np.isfinite(mstar_over_mhalo))[0]
+log_M200 = log_M200[make_safe]
+mstar_over_mhalo = mstar_over_mhalo[make_safe]
+Birth_dens_30kpc = Birth_dens_30kpc[make_safe]
+H_abund_30kpc = H_abund_30kpc[make_safe]
+
+#make safe considering birth density
+make_safe2 = np.where(np.isfinite(Birth_dens_30kpc))[0]
+log_M200 = log_M200[make_safe2]
+mstar_over_mhalo = mstar_over_mhalo[make_safe2]
+Birth_dens_30kpc = Birth_dens_30kpc[make_safe2]
+H_abund_30kpc = H_abund_30kpc[make_safe2]
+
+# Then we need to sort the data in ascending x value
+sort_M200 = np.argsort(log_M200) # argsort gives us the indices that sort the array
+log_M200 = log_M200[sort_M200]
+mstar_over_mhalo = mstar_over_mhalo[sort_M200]
+Birth_dens_30kpc = Birth_dens_30kpc[sort_M200]
+H_abund_30kpc = H_abund_30kpc[sort_M200]
+
+# Remove zero energy fractions
+nonzero = np.where(Birth_dens_30kpc!=0)[0]
+Birth_dens_30kpc = Birth_dens_30kpc[nonzero]
+H_abund_30kpc = H_abund_30kpc[nonzero]
+log_M200 = log_M200[nonzero]
+mstar_over_mhalo = mstar_over_mhalo[nonzero]
+print(len(Birth_dens_30kpc),len(log_M200),len(mstar_over_mhalo))
+
+# Now we can get the running median
+running_median = lowess.lowess(mstar_over_mhalo, log_M200, frac=0.1, it=3, delta=0.0, is_sorted=True, missing='none', return_sorted=False)
+print(running_median)
+
+fig, ax = plt.subplots(figsize=(8,6))
+
+bins = np.linspace(min(Birth_dens_30kpc),max(Birth_dens_30kpc))
+plt.hist(Birth_dens_30kpc,bins=bins,color='k',histtype='step',alpha=1)
+plt.xlabel('Birth Density',fontsize=16)
+plt.ylabel('Count',fontsize=16)
+
+log_nHBirthdensity_30kpc_sorted = np.log10((Birth_dens_30kpc*H_abund_30kpc)/1.6737e-24)
+# print(min(Birth_dens_30kpc),max(Birth_dens_30kpc))
+
+median_nHBirthdensity_30kpc = lowess.lowess(log_nHBirthdensity_30kpc_sorted, log_M200, frac=0.2, it=3, delta=0.0, is_sorted=True, missing='none', return_sorted=False)
+print(median_nHBirthdensity_30kpc)
+dlog_nHBirthdensity_30kpc = log_nHBirthdensity_30kpc_sorted - median_nHBirthdensity_30kpc
+
+import get_moving_spearman_rank as moving_sp
+
+centres,moving_rho, moving_pval = moving_sp.get_moving_spearman_rank(log_M200,mstar_over_mhalo,
+                                                                       dlog_nHBirthdensity_30kpc,
+                                                                      window_sizes=[400,100],
+                                                                     window_steps=[1200,50],
+                                                                     transition_points=[12.,])
+#Get values at stellar and AGN scales
+w_stell = 0.05
+w_AGN = 0.05
+
+#Stellar
+stellar_indx = np.where((log_M200[centres.astype('int')] > 10.5-w_stell) & (log_M200[centres.astype('int')] < 10.5+w_stell))[0]
+if np.all(moving_pval[stellar_indx] > 0.01):
+    stellar_ranks = 0
+elif np.any(moving_pval[stellar_indx] > 0.01):
+    values_pval_stell = moving_pval[stellar_indx]
+    values_rho_stell = moving_rho[stellar_indx]
+    signif_stell = values_rho_stell[np.where(values_pval_stell < 0.01)[0]]
+    stellar_ranks = np.mean(signif_stell)
+else:
+    stellar_ranks = np.mean(moving_rho[stellar_indx])
+print(stellar_ranks)
+
+#AGN
+AGN_indx = np.where((log_M200[centres.astype('int')] > 12.0-w_AGN) & (log_M200[centres.astype('int')] < 12.0+w_AGN))[0]
+if np.all(moving_pval[AGN_indx] > 0.01):
+    AGN_ranks = 0
+elif np.any(moving_pval[AGN_indx] > 0.01):
+    values_pval_AGN = moving_pval[AGN_indx]
+    values_rho_AGN = moving_rho[AGN_indx]
+    signif_AGN = values_rho_AGN[np.where(values_pval_AGN < 0.01)[0]]
+    AGN_ranks = np.mean(signif_AGN)
+else:
+    AGN_ranks = np.mean(moving_rho[AGN_indx])
+
+#Plot
+fig, ax = plt.subplots(figsize=(14,4))
+
+plt.subplot(1,2,1)
+plt.plot(log_M200[centres.astype('int')],moving_rho,c='k')
+plt.title('Spearman Rank Correlation Coefficient',fontsize=16)
+plt.ylabel(r'$\rho$',fontsize=16)
+plt.xlabel(r'$\log(M_{200}/{\rm M}_\odot)$',fontsize=16)
+plt.plot([9.9,14.3],[0,0],ls=':',c='k',alpha=0.8,label='Correlation threshold')
+plt.ylim(-1,1)
+plt.xlim(9.9,14.3)
+plt.legend(fontsize=12)
+plt.fill_between(log_M200[centres.astype('int')],-1,1, where=(moving_pval > 0.01), color='k', alpha=0.3,linewidth=0)
+
+plt.subplot(1,2,2)
+plt.plot(log_M200[centres.astype('int')],moving_pval,c='k')
+plt.title('Spearman Rank P-value',fontsize=16)
+plt.ylabel('p',fontsize=16)
+plt.xlabel(r'$\log(M_{200}/{\rm M}_\odot)$',fontsize=16)
+plt.plot([9.9,14.3],[0.01,0.01],ls=':',c='k',alpha=0.8,label='Significance threshold')
+plt.ylim(0,1)
+plt.xlim(9.9,14.3)
+plt.legend(fontsize=12)
+plt.fill_between(log_M200[centres.astype('int')],-1,1, where=(moving_pval > 0.01), color='k', alpha=0.3)
+
+plt.show()
+
+m_dm_codeunits = 6.570332889156362e-4
+hubble_param = 0.6777
+m_dm_solunits = (m_dm_codeunits/hubble_param) * 1e10
+
+m_star = m_dm_solunits * (omega_b)/(omega_0-omega_b)
+
+log_m_dm = np.log10(m_dm_solunits)
+log_m_star = np.log10(m_star)
+
+#make safe
+make_safe = np.where(np.isfinite(mstar_over_mhalo))[0]
+M200 = M200[make_safe]
+make_safe2 = np.where(np.isfinite(Birth_dens_30kpc))[0]
+M200 = M200[make_safe2]
+sort_M200 = np.argsort(M200)
+M200 = M200[sort_M200]
+nonzero = np.where(Birth_dens_30kpc!=0)[0]
+M200 = M200[nonzero]
+
+line = np.linspace(9.8,M200[-1],len(M200)+1)
+Mstar_line = np.log10((50*m_star/line)/(omega_b/omega_0))
+
+# print(np.log10((50*m_star/M200)/(omega_b/omega_0)))
+# print(log_M200/mstar_over_mhalo)
+
+rank_2 = np.where((mstar_over_mhalo>=np.log10((50*m_star/M200)/(omega_b/omega_0))))[0]
+new_logM200 = log_M200[rank_2]
+new_mstar_over = mstar_over_mhalo[rank_2]
+new_dlognH = dlog_nHBirthdensity_30kpc[rank_2]
+
+print(len(log_M200),len(new_logM200))
+
+new_centres,new_moving_rho, new_moving_pval = moving_sp.get_moving_spearman_rank(new_logM200,new_mstar_over,
+                                                                       new_dlognH,
+                                                                      window_sizes=[400,100],
+                                                                     window_steps=[1200,50],
+                                                                     transition_points=[12.,])
+
+fig, ax = plt.subplots(figsize=(17.5,6))
+fig.subplots_adjust(wspace=0.1)
+
+plt.subplot(1,2,1)
+hex1 = plt.hexbin(log_M200,mstar_over_mhalo,C=log_nHBirthdensity_30kpc_sorted,vmax=2,vmin=-0.5,cmap='viridis',reduce_C_function=np.mean)
+cbar1 = plt.colorbar(hex1)
+plt.plot(log_M200,running_median,c='k',lw=3,label='Running Median',linestyle='--')
+plt.plot(np.log10(line),Mstar_line,c='maroon',lw=3,label='Reliability Threshold',linestyle='dashdot')
+plt.plot((9.8,14.8),(0,0),ls=(0, (5, 10)),c='k',alpha=0.7,label='Efficiency of Unity')
+plt.legend(loc='upper right',prop={'size': 11})
+plt.xlabel(r'$\log_{10}(M_{200}/{\rm M}_\odot)$',fontsize=18)
+plt.ylabel(r'$\log_{10}(M^{cen}_{\star}/M_{200})/(\Omega_b/\Omega_m)$',fontsize=18)
+cbar1.ax.set_ylabel(r'$\log_{10}(n_{H,birth})$',fontsize=16)
+plt.tick_params(labelbottom=True, labeltop=False, labelleft=True, labelright=False)
+plt.tick_params(bottom=True, top=True, left=True, right=True)
+plt.tick_params(axis="x", direction="in", width=1, length=7, labelsize=12)
+plt.tick_params(axis="y", direction="in", width=1, length=7, labelsize=12)
+plt.minorticks_on()
+plt.tick_params(which='minor',direction='in',bottom=True,top=True,left=True,right=True,length=3,width=0.8)
+plt.yticks(np.arange(-4, 1.5, 0.5))
+plt.xticks(np.arange(10,15,0.5))
+plt.xlim(9.8,14.8)
+plt.ylim(-4,1)
+
+plt.subplot(1,2,2)
+hex2 = plt.hexbin(log_M200,mstar_over_mhalo,C=dlog_nHBirthdensity_30kpc,cmap='viridis',vmax=0.3,vmin=-0.5,reduce_C_function=np.mean)
+cbar2 = plt.colorbar(hex2)
+plt.plot(log_M200,running_median,c='k',lw=3,label='Running Median',linestyle='--')
+plt.plot(np.log10(line),Mstar_line,c='maroon',lw=3,label='Reliability Threshold',linestyle='dashdot')
+plt.plot((9.8,14.8),(0,0),ls=(0, (5, 10)),c='k',alpha=0.7,label='Efficiency of Unity')
+plt.legend(loc='upper right',prop={'size': 11})
+plt.xlabel(r'$\log_{10}(M_{200}/{\rm M}_\odot)$',fontsize=18)
+# plt.ylabel(r'$\log_{10}(M^{cen}_{\star}/M_{200})/(\Omega_b/\Omega_m)$',fontsize=18)
+cbar2.ax.set_ylabel(r'$\Delta \log_{10}(n_{H,birth})$',fontsize=16)
+plt.tick_params(labelbottom=True, labeltop=False, labelleft=True, labelright=False)
+plt.tick_params(bottom=True, top=True, left=True, right=True)
+plt.tick_params(axis="x", direction="in", width=1, length=7, labelsize=12)
+plt.tick_params(axis="y", direction="in", width=1, length=7, labelsize=12)
+plt.minorticks_on()
+plt.tick_params(which='minor',direction='in',bottom=True,top=True,left=True,right=True,length=3,width=0.8)
+plt.yticks(np.arange(-4, 1.5, 0.5))
+plt.xticks(np.arange(10,15,0.5))
+plt.xlim(9.8,14.8)
+plt.ylim(-4,1)
+
+plt.savefig('BirthDensity_before_after',bbox_inches='tight')
+plt.show()
+
+import matplotlib.gridspec as gridspec
+import matplotlib as mpl
+
+fig = plt.figure(figsize=(10,9))
+
+spec = gridspec.GridSpec(ncols=1, nrows=2,
+                         width_ratios=[2], wspace=0.5,
+                         hspace=0, height_ratios=[2,0.4])
+
+ax0 = fig.add_subplot(spec[0])
+hex1 = ax0.hexbin(log_M200,mstar_over_mhalo,C=dlog_nHBirthdensity_30kpc,vmax=0.3,vmin=-0.3,cmap='viridis',reduce_C_function=np.mean)
+ax0.plot(log_M200,running_median,c='k',lw=3,label='Running Median',linestyle='--')
+ax0.plot(np.log10(line),Mstar_line,c='maroon',lw=3,label='Reliability Threshold',linestyle='dashdot')
+plt.plot((9.8,14.8),(0,0),ls=(0, (5, 10)),c='k',alpha=0.7,label='Efficiency of Unity')
+ax0.legend(loc='upper right',prop={'size': 13})
+plt.xlabel(r'$\log_{10}(M_{200}/{\rm M}_\odot)$',fontsize=18)
+plt.ylabel(r'$\log_{10}(M^{cen}_{\star}/M_{200})/(\Omega_b/\Omega_m)$',fontsize=18)
+plt.tick_params(labelbottom=False, labeltop=False, labelleft=True, labelright=False)
+plt.tick_params(bottom=True, top=True, left=True, right=True)
+plt.tick_params(axis="x", direction="in", width=1, length=7, labelsize=12)
+plt.tick_params(axis="y", direction="in", width=1, length=7, labelsize=12)
+plt.minorticks_on()
+plt.tick_params(which='minor',direction='in',bottom=True,top=True,left=True,right=True,length=3,width=0.8)
+plt.yticks(np.arange(-3.5, 1.5, 0.5))
+plt.xticks(np.arange(10,15,0.5))
+plt.xlim(9.8,14.8)
+plt.ylim(-4,1)
+
+ax1 = fig.add_subplot(spec[1])
+ax1.plot(log_M200[centres.astype('int')],moving_rho,c='k',lw=2.5)
+ax1.plot(new_logM200[new_centres.astype('int')],new_moving_rho,c='r',lw=2.5,ls='--')
+ax1.set_ylabel(r'$\rho$',fontsize=18)
+ax1.set_xlabel(r'$\log_{10}(M_{200}/{\rm M}_\odot)$',fontsize=18)
+ax1.plot([9.8,14.8],[0,0],ls=(0, (1, 3)),c='k',alpha=0.8,label='Correlation threshold')
+plt.tick_params(labelbottom=True, labeltop=False, labelleft=True, labelright=False)
+plt.tick_params(bottom=True, top=True, left=True, right=True)
+plt.tick_params(axis="x", direction="in", width=1, length=7, labelsize=12)
+plt.tick_params(axis="y", direction="in", width=1, length=7, labelsize=12)
+plt.minorticks_on()
+plt.tick_params(which='minor',direction='in',bottom=True,top=True,left=False,right=False,length=3,width=0.8)
+plt.xticks(np.arange(10,15,0.5))
+plt.xlim(9.8,14.8)
+plt.ylim(-1,1)
+ax1.yaxis.set_ticks(np.arange(-1, 1.5, 1))
+ax1.fill_between(log_M200[centres.astype('int')],-1,1,where=(moving_pval > 0.01),color='k',
+                 alpha=0.3,linewidth=0)
+if stellar_ranks != 0:
+    plt.text(13.47,0.25,r"$\rho^\prime_{stellar} = %s$"%round(stellar_ranks,2), fontsize=15)
+else:
+    pass
+if AGN_ranks != 0:
+    plt.text(13.47,-0.55,r"$\rho^\prime_{AGN} = %s$"%round(AGN_ranks,2), fontsize=15)
+else:
+    pass
+
+cax = plt.axes([0.95,0.16,0.04,0.7])
+mappable1 = mpl.cm.ScalarMappable(norm=mpl.colors.LogNorm(),cmap='viridis')
+cb1 = plt.colorbar(hex1,cax=cax,orientation='vertical')
+cb1.set_label(r'$\Delta$ $\log_{10}(n_{H,birth})$',fontsize=16,labelpad=6)
+cb1.ax.tick_params(labelsize=14)
+
+plt.savefig('BirthDensity',bbox_inches='tight')
+plt.show()
+
+fig, ax = plt.subplots(figsize=(13,8))
+
+hex = plt.hexbin(log_M200,log_nHBirthdensity_30kpc_sorted,mincnt=0.01,reduce_C_function=np.mean,norm=mpl.colors.LogNorm(),cmap='Greys_r')
+cbar = plt.colorbar(hex)
+plt.plot(log_M200,median_nHBirthdensity_30kpc,c='r',lw=3,label='Running Median',linestyle='--')
+
+plt.xlabel(r'$\log_{10}(M_{200}/{\rm M}_\odot)$',fontsize=18)
+plt.ylabel(r'$\log_{10}(n_{H,birth})$',fontsize=18)
+plt.legend(loc='lower right',fontsize=14)
+cbar.ax.set_ylabel(r'$\log_{10}$(Count)',fontsize=16)
+cbar.ax.tick_params(labelsize=14)
+plt.tick_params(labelbottom=True, labeltop=False, labelleft=True, labelright=False)
+plt.tick_params(bottom=True, top=True, left=True, right=True)
+plt.tick_params(axis="x", direction="in", width=1, length=7, labelsize=12)
+plt.tick_params(axis="y", direction="in", width=1, length=7, labelsize=12)
+plt.yticks(np.arange(-2, 4, 0.5))
+plt.xticks(np.arange(10,15,0.5))
+plt.xlim(9.8,14.8)
+plt.ylim(-1.9,3.9)
+
+plt.savefig('BirthDensity_median',bbox_inches='tight')
+plt.show()
