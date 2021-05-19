@@ -1,0 +1,175 @@
+import numpy as np
+import matplotlib.pyplot as plt
+import catalogue_reading as cat 
+import particle_reading as part
+from tqdm import tqdm
+import pyread_eagle
+import h5py as h5
+import statsmodels.nonparametric.smoothers_lowess as lowess
+
+sim = 'L0100N1504'
+model = 'REFERENCE'
+tag = '028_z000p000'
+data_location = '/hpcdata6/astrcrai/backup'
+
+snapfile = data_location + '/' + sim + '/' + model + '/data/snapshot_'+tag+'/snap_'+tag+'.0.hdf5'
+partfile = data_location + '/' + sim + '/' + model + '/data/particledata_'+tag+'/eagle_subfind_particles_'+tag+'.0.hdf5'
+
+# Load what we need from the catalogues
+# FOF quantities
+M200 = cat.catalogue_read('FOF','Group_M_Crit200',sim=sim,model=model,tag=tag,data_location=data_location) * 1e10
+numof_subhalos = cat.catalogue_read('FOF','NumOfSubhalos',sim=sim,model=model,tag=tag,data_location=data_location)
+first_subhalo = cat.catalogue_read('FOF','FirstSubhaloID',sim=sim,model=model,tag=tag,data_location=data_location)
+# Subhalo quantities
+COP = cat.catalogue_read('Subhalo','CentreOfPotential',sim=sim,model=model,tag=tag,data_location=data_location)
+Mstar_tot_cat = cat.catalogue_read('Subhalo','MassType',sim=sim,model=model,tag=tag,data_location=data_location) * 1e10
+Mstar_30kpc_cat = cat.catalogue_read('Subhalo','ApertureMeasurements/Mass/030kpc',sim=sim,model=model,tag=tag,data_location=data_location) * 1e10
+subhalo_length_type = cat.catalogue_read('Subhalo','SubLengthType',sim=sim,model=model,tag=tag,data_location=data_location)
+Gas_fraction_30kpc = cat.catalogue_read('Subhalo','ApertureMeasurements/Mass/030kpc',sim=sim,model=model,tag=tag,data_location=data_location)[:,0]/cat.catalogue_read('Subhalo','Mass',sim=sim,model=model,tag=tag,data_location=data_location)
+print('-finish reading catalogue quantities')
+
+# Create length lists
+subhalo_length_stars = subhalo_length_type[:,4]
+subhalo_length_gas = subhalo_length_type[:,0]
+n_sub = len(subhalo_length_stars)
+n_fof = len(M200)
+
+# Establish our halo sample - groups with M200>10^10
+mass_selection = np.where((M200>np.power(10.,10)) & (numof_subhalos>0))[0]
+
+# Initialise the EagleSnapshot instance
+snapshot_object = pyread_eagle.EagleSnapshot(snapfile)
+partfile_object = pyread_eagle.EagleSnapshot(partfile)
+
+# Get our factors of h and a, and the box size
+with h5.File(snapfile,'r') as f:
+    h = f['Header'].attrs['HubbleParam']
+    a = f['Header'].attrs['ExpansionFactor']
+    boxsize = f['Header'].attrs['BoxSize'] * a/h # Note the unit conversion!
+
+# Establish the size of the region - 30 pkpc, but in "code units"
+region_size = 0.03
+
+# Make an empty array to store our results in
+Mstar_tot = np.zeros(len(mass_selection))
+Mstar_30kpc = np.zeros(len(mass_selection))
+mass_diff_tot = np.zeros(len(mass_selection))
+aexp_30kpc = np.zeros(len(mass_selection))
+Mgas_30kpc = np.zeros(len(mass_selection))
+Mgas_tot = np.zeros(len(mass_selection))
+Gas_dens_30kpc = np.zeros(len(mass_selection))
+Gas_dens_tot = np.zeros(len(mass_selection))
+H_abund_30kpc = np.zeros(len(mass_selection))
+H_abund_tot = np.zeros(len(mass_selection))
+Birth_dens_30kpc = np.zeros(len(mass_selection))
+Energy_frac_30kpc = np.zeros(len(mass_selection))
+Metal_30kpc = np.zeros(len(mass_selection))
+coords = []
+coords_tot = []
+
+# Run select_region
+xmin = 0
+xmax = boxsize*h/a
+ymin = xmin
+ymax = xmax
+zmin = xmin
+zmax = xmax
+
+snapshot_object.select_region(xmin,xmax,ymin,ymax,zmin,zmax)
+partfile_object.select_region(xmin,xmax,ymin,ymax,zmin,zmax)
+
+# Create offset list
+offset = np.zeros(n_fof)
+length = np.zeros(n_fof)
+for ifof in range(1,n_fof):
+    isub = first_subhalo[ifof-1]
+    length[ifof-1] = subhalo_length_stars[isub]
+    offset[ifof] = offset[ifof-1]+length[ifof-1]
+
+# Read group number and subgroup number
+read_groupnumber = part.particle_read(4,'GroupNumber',partfile_object,partfile)
+print('-finish reading groupnumber')
+read_subgroupnumber = part.particle_read(4,'SubGroupNumber',partfile_object,partfile)
+print('-finish reading subgroupnumber')
+
+# Mask by centrals and sort by group number
+mask_centrals = np.where(read_subgroupnumber == 0)[0]
+read_groupnumber = read_groupnumber[mask_centrals]
+sort_groupnum = np.argsort(read_groupnumber)
+
+# M200 still needs masking
+M200 = M200[mass_selection]
+
+# Load the particle quantities
+read_coords = part.particle_read(4,'Coordinates',partfile_object,partfile)[mask_centrals,:][sort_groupnum,:] #star coords
+read_mass = part.particle_read(4,'Mass',partfile_object,partfile)[mask_centrals][sort_groupnum] #stellar mass
+read_aexp = part.particle_read(4,'StellarFormationTime',partfile_object,partfile)[mask_centrals][sort_groupnum] #star formation times
+read_Mgas = part.particle_read(0,'Mass',partfile_object,partfile)[mask_centrals][sort_groupnum] #gas mass
+read_gas_dens = part.particle_read(0,'Density',partfile_object,partfile,cgs_units=True)[mask_centrals][sort_groupnum] #gas density
+read_H_abund = part.particle_read(0,'SmoothedElementAbundance/Hydrogen',partfile_object,partfile)[mask_centrals][sort_groupnum] #H abundance
+read_birth_dens = part.particle_read(4,'BirthDensity',partfile_object,partfile,cgs_units=True)[mask_centrals][sort_groupnum] #birth density
+read_energy_frac = part.particle_read(4,'Feedback_EnergyFraction',partfile_object,partfile)[mask_centrals][sort_groupnum] #stellarFB energy fraction
+read_metal = part.particle_read(4,'Metallicity',partfile_object,partfile)[mask_centrals][sort_groupnum] #metallicity
+print('-finish reading particle quantities')
+
+# Loop over the haloes in the sample
+for jfof in tqdm(range(len(mass_selection)-1)):
+    
+    ifof = mass_selection[jfof]
+    
+    if numof_subhalos[ifof] == 0:
+        continue
+
+    isub = first_subhalo[ifof]
+    
+    if subhalo_length_stars[isub]==0:
+        continue
+        
+    istart = int(offset[ifof])
+    iend = int(istart+length[ifof])
+    
+    # Make a mini array for coords of this halo
+    halo_coords = read_coords[range(istart,iend),:]
+    
+   # Get the centre of potential for the halo in question
+    centre = COP[isub]
+    
+   # Centre our coordinates and wrap the box
+    halo_coords -= centre
+    halo_coords += boxsize/2.
+    halo_coords %= boxsize
+    halo_coords -= boxsize/2.
+    
+    # Get mask of particles for each coords range inside 30kpc
+    r2 = np.einsum('...j,...j->...',halo_coords,halo_coords)
+    
+    coords.append(halo_coords[(r2<region_size**2),:])
+    coords_tot.append(halo_coords)
+    
+    particle_select = np.where(r2<region_size**2)[0]
+    
+    # Mask by groupnumber range
+    halo_mass = read_mass[istart:iend]
+    halo_aexp = read_aexp[istart:iend]
+    halo_Mgas = read_Mgas[istart:iend]
+    halo_gas_dens = read_gas_dens[istart:iend]
+    halo_H_abund = read_H_abund[istart:iend]
+    halo_birth_dens = read_birth_dens[istart:iend]
+    halo_energy_frac = read_energy_frac[istart:iend]
+    halo_metal = read_metal[istart:iend]
+    
+    # Compute quantities in CORRECT UNITS and write to output array
+    Mstar_tot[jfof] = np.sum(halo_mass,dtype=np.float64)*1e10 #total stellar mass
+    Mstar_30kpc[jfof] = np.sum(halo_mass[particle_select],dtype=np.float64)*1e10 #stellar mass within 30kpc
+    mass_diff_tot[jfof] = (Mstar_tot[jfof]-Mstar_tot_cat[isub][4])/Mstar_tot_cat[isub][4] #compare totals
+    
+    aexp_30kpc[jfof] = (np.sum(halo_mass[particle_select]*halo_aexp[particle_select]))*1e10/Mstar_30kpc[jfof] #mean stellar mass-weighted expansion factor within 30kpc
+    Mgas_30kpc[jfof] = np.sum(halo_Mgas[particle_select])*1e10 #gas mass of particles within 30kpc
+    Mgas_tot[jfof] = np.sum(halo_Mgas)*1e10 #gas mass of particles within 30kpc
+    Gas_dens_30kpc[jfof] = np.sum(halo_Mgas[particle_select]*halo_gas_dens[particle_select]*1e10)/Mgas_30kpc[jfof] #mean gas-mass-weighted gas density within 30kpc
+    Gas_dens_tot[jfof] = np.sum(halo_Mgas*halo_gas_dens*1e10)/Mgas_tot[jfof] #mean gas mass-weighted total gas density
+    H_abund_30kpc[jfof] = np.sum(halo_Mgas[particle_select]*halo_H_abund[particle_select]*1e10)/Mgas_30kpc[jfof] #mean gas-mass-weighted H abund in 30kpc
+    H_abund_tot[jfof] = np.sum(halo_Mgas*halo_H_abund*1e10)/Mgas_tot[jfof] #mean gas-mass-weighted total H abundance
+    Birth_dens_30kpc[jfof] = np.sum(halo_mass[particle_select]*halo_birth_dens[particle_select]*1e10)/Mstar_30kpc[jfof] #mean mass-weighted stellar birth density within 30kpc
+    Energy_frac_30kpc[jfof] = np.sum(halo_mass[particle_select]*halo_energy_frac[particle_select])*1e10/Mstar_30kpc[jfof] #mean mass-weighted energy fraction within 30kpc
+    Metal_30kpc[jfof] = np.mean(halo_metal[particle_select]) #mean metallicity within 30kpc
