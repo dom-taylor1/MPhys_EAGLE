@@ -1,6 +1,6 @@
 # MPhys_EAGLE
 
-This repository stores the code used in Dominic J. Taylor's MPhys Thesis titled 'What Influences the Efficiency of Galaxy Formation?' undergone at the University of Liverpool in 2021 and supervised by Prof. Rob Crain. It includes:
+This repository stores the Python code used in Dominic J. Taylor's MPhys Thesis titled 'What Influences the Efficiency of Galaxy Formation?' carried out at the University of Liverpool in 2021 and supervised by Prof. Rob Crain. It includes:
 
 ## 1) compute_particle_quantities
 Python code used to compute quantities from particles in the EAGLE simulations by wrapping over the relevant periodic simulation box
